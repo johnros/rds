@@ -2,40 +2,30 @@
 
 # Old versions #
 #load('/home/johnros/Projects/Yakir/oldFunctions.Rdata')
-
 ####################################################
 
-
-
-
+# Utility functions
 import <- function (file) {
   raw1<- scan(file, what=character())
   return(as.numeric(strsplit(raw1, split=",")[[1]]))
 }
-
 
 sum.ranks<- function(data){
   data.table<- table(data)[-1]
   as.numeric(rownames(data.table))*c(data.table)
 }
 
-
-
-comparison <- function (estimation) {
-  non.na<- !is.na(estimation)
-  print(signif(cbind(sapply(estimation[non.na], function(x) return(x$Nj)))))
-  print(sapply(estimation[non.na], function(x) sum(x$Nj)))
-  print(sapply(estimation[non.na], function(x) x$theta))
-  print(sapply(estimation[non.na], function(x) x[[4]]$value))
-}
-
-
-# Maps the line to the range: minimum+range
+# Maps the line to the range: minimum+range. Used as a "soft constraint" on the values of theta.
 inv.qnorm.theta<- function(qnorm.theta, const, range=20, minimum=-10){
-  normalized.theta<- pnorm(qnorm.theta / const)
-  normalized.theta2<- (normalized.theta*range) + minimum
-  return(normalized.theta2)
+	normalized.theta<- pnorm(qnorm.theta / const)
+	normalized.theta2<- (normalized.theta*range) + minimum
+	return(normalized.theta2)
 }
+qnorm.theta<- function(theta, const, range=20, minimum=-10){
+	normalized.theta<- (theta-minimum)/range
+	const*qnorm(normalized.theta)
+}
+
 ## Test:
 # inv.qnorm.theta(10, 100)
 # inv.qnorm.theta(10, 10)
@@ -44,12 +34,6 @@ inv.qnorm.theta<- function(qnorm.theta, const, range=20, minimum=-10){
 # inv.qnorm.theta(25,200, range=2)
 # inv.qnorm.theta(25,200, range=1)
 # curve(inv.qnorm.theta(x,const=0.6, range=2, minimum=1), -10,10)
-
-qnorm.theta<- function(theta, const, range=20, minimum=-10){
-  normalized.theta<- (theta-minimum)/range
-  const*qnorm(normalized.theta)
-}
-## Test:
 # qnorm.theta(25, range=30, minimum=-1, const=0.1)
 # qnorm.theta(theta=-0.5, const=10, range=2, minimum=-1)
 # inv.qnorm.theta(qnorm.theta(5,100),100)
@@ -59,99 +43,115 @@ qnorm.theta<- function(theta, const, range=20, minimum=-10){
 
 
 
+# Compare the output of different initialization values
+comparison <- function (estimation) {
+  non.na<- !is.na(estimation)
+  print(signif(cbind(sapply(estimation[non.na], function(x) return(x$Nj)))))
+  print(sapply(estimation[non.na], function(x) sum(x$Nj)))
+  print(sapply(estimation[non.na], function(x) x$theta))
+  print(sapply(estimation[non.na], function(x) x[[4]]$value))
+}
 
 
-#---------------------- CPP likelihod version-------------#
+
+
+
+
+
+
+#---------------------- C++ version-------------#
  
  # Optimization stage:
 
 ## TODO: Fix estimation for a single degree!
+
+# Note: make sure likelihood.cpp is compiled for the right system!
 dyn.load("/home/johnros/Projects/Yakir/likelihoodVer9.32.so")
 dyn.load("/home/johnros/Projects/Yakir/likelihoodVer9.64.so")
 
 
 
-likelihood.cpp.wrap.general <- function (func, data, init, initial.Nj, const, arc, maxit=10000, theta.range, theta.minimum,...) {
-  # Look for degrees in the data, so their estimates are nony vanishing
-  N.j<- rep(0, max(data)) 
-  uniques<- unique(data)
-  uniques<- uniques[uniques!=0]
-  s.uniques<- sort(uniques)
-  param.size<- length(uniques)
-  data.table<-table(data)[-1]
-  
-  likelihood.wrap1<- function(par){
-	  final.result<- -Inf
-	  ccc<- exp(par[1])
-	  theta<- inv.qnorm.theta(par[2], const = const, range=theta.range, minimum=theta.minimum)
-	  N.j<- rep(0, max(data))
-	  N.j[s.uniques]<- exp(tail(par,-2))
-	  if(any( N.j[s.uniques] < data.table )) return(final.result)	  
-	  
-	  if(is.numeric(ccc) && is.numeric(theta) && !is.infinite(theta) && !is.infinite(ccc) ) {
-		  result<- .C(func, 
-				  sample=as.integer(data), 
-				  c=as.numeric(ccc), 
-				  theta=as.numeric(theta), 
-				  Nj=as.numeric(N.j), 
-				  constant=as.numeric(const),
-				  n=as.integer(length(data)), 
-				  N=as.integer(length(N.j)),
-				  arc=arc,
-				  result=as.double(0))
-		  final.result<- result$result
-	  }	  
-	  return(final.result)
-  }
-  
-  cap<- max(data)
-  cap.arcs<-  sum.ranks(data)
-  max.cap.arcs<- max(cap.arcs)
-  log.c<- -log(max(sum.ranks(data)*sum(data)) * max(data)) -1
-  
-  if(missing(init)) { 
-	  init<- list( 
-			  theta0.2= c(log.c=log.c, qnorm.theta=qnorm.theta(0.2,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
-        theta0.5= c(log.c=log.c, qnorm.theta=qnorm.theta(0.5,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
-			  theta1= c(log.c=log.c, qnorm.theta=qnorm.theta(1,const,range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
-        theta2= c(log.c=log.c, qnorm.theta=qnorm.theta(2,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
-			  theta3= c(log.c=log.c, qnorm.theta=qnorm.theta(3,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
-			  theta4= c(log.c=log.c, qnorm.theta=qnorm.theta(4,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
-			  theta10= c(log.c=log.c, qnorm.theta=qnorm.theta(10,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 )			  			  
-	  )}
-  
-  #range.ind<- sapply(init, function(x) x['qnorm.theta']>theta.minimum && x['qnorm.theta.']<theta.minimum+range)
-  likelihood.optim<-lapply(init, function(x) {
-			  try(optim(par=x, fn=likelihood.wrap1, control=list(fnscale=-1, maxit=maxit),...)) }  )  
-  
-  prepare.result<- function(x){    
-    result<- NA
-    
-    if(is.list(x)){
-      N.j[s.uniques]<- exp(tail(x$par,-2))
-      result<- list( 
-        c=exp(x$par[[1]]), 
-        theta=inv.qnorm.theta(x$par[[2]],const, range=theta.range, minimum=theta.minimum), 
-        Nj=N.j, 
-        x  )
-    }    
-    return(result)
-  }   
-  return(lapply(likelihood.optim, function(x) try(prepare.result(x))))
-}
-    
-#dyn.load("/specific/a/home/cc/students/math/rosenbla/Projects/Yakir/likelihoodVer8.so")
-dyn.load("../likelihoodVer8.so")
 
 
-# ## Test:
-#  (tempData<- sample(c(t(data1[1,])), size=1000))
-#  tempData<- data1[1,]
-#  (temp21<-likelihood.cpp.wrap.general(func="likelihood", data=tempData, const=100, arc=TRUE, theta.minimum=-1, theta.range=4, maxit=10000))
-#  comparison(temp21)
+# Deprecated version
+#likelihood.cpp.wrap.general <- function (func, data, init, initial.Nj, const, arc, maxit=10000, theta.range, theta.minimum,...) {
+#  # Look for degrees in the data, so their estimates are nony vanishing
+#  N.j<- rep(0, max(data)) 
+#  uniques<- unique(data)
+#  uniques<- uniques[uniques!=0]
+#  s.uniques<- sort(uniques)
+#  param.size<- length(uniques)
+#  data.table<-table(data)[-1]
+#  
+#  likelihood.wrap1<- function(par){
+#	  final.result<- -Inf
+#	  ccc<- exp(par[1])
+#	  theta<- inv.qnorm.theta(par[2], const = const, range=theta.range, minimum=theta.minimum)
+#	  N.j<- rep(0, max(data))
+#	  N.j[s.uniques]<- exp(tail(par,-2))
+#	  if(any( N.j[s.uniques] < data.table )) return(final.result)	  
+#	  
+#	  if(is.numeric(ccc) && is.numeric(theta) && !is.infinite(theta) && !is.infinite(ccc) ) {
+#		  result<- .C(func, 
+#				  sample=as.integer(data), 
+#				  c=as.numeric(ccc), 
+#				  theta=as.numeric(theta), 
+#				  Nj=as.numeric(N.j), 
+#				  constant=as.numeric(const),
+#				  n=as.integer(length(data)), 
+#				  N=as.integer(length(N.j)),
+#				  arc=arc,
+#				  result=as.double(0))
+#		  final.result<- result$result
+#	  }	  
+#	  return(final.result)
+#  }
+#  
+#  cap<- max(data)
+#  cap.arcs<-  sum.ranks(data)
+#  max.cap.arcs<- max(cap.arcs)
+#  log.c<- -log(max(sum.ranks(data)*sum(data)) * max(data)) -1
+#  
+#  if(missing(init)) { 
+#	  init<- list( 
+#			  theta0.2= c(log.c=log.c, qnorm.theta=qnorm.theta(0.2,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
+#        theta0.5= c(log.c=log.c, qnorm.theta=qnorm.theta(0.5,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
+#			  theta1= c(log.c=log.c, qnorm.theta=qnorm.theta(1,const,range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
+#        theta2= c(log.c=log.c, qnorm.theta=qnorm.theta(2,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
+#			  theta3= c(log.c=log.c, qnorm.theta=qnorm.theta(3,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
+#			  theta4= c(log.c=log.c, qnorm.theta=qnorm.theta(4,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 ),
+#			  theta10= c(log.c=log.c, qnorm.theta=qnorm.theta(10,const, range=theta.range, minimum=theta.minimum), log(data.table)+1 )			  			  
+#	  )}
+#  
+#  #range.ind<- sapply(init, function(x) x['qnorm.theta']>theta.minimum && x['qnorm.theta.']<theta.minimum+range)
+#  likelihood.optim<-lapply(init, function(x) {
+#			  try(optim(par=x, fn=likelihood.wrap1, control=list(fnscale=-1, maxit=maxit),...)) }  )  
+#  
+#  prepare.result<- function(x){    
+#    result<- NA
+#    
+#    if(is.list(x)){
+#      N.j[s.uniques]<- exp(tail(x$par,-2))
+#      result<- list( 
+#        c=exp(x$par[[1]]), 
+#        theta=inv.qnorm.theta(x$par[[2]],const, range=theta.range, minimum=theta.minimum), 
+#        Nj=N.j, 
+#        x  )
+#    }    
+#    return(result)
+#  }   
+#  return(lapply(likelihood.optim, function(x) try(prepare.result(x))))
+#}
+## Test:
+#data1<-read.csv('/home/johnros/Projects/Yakir/Example3/JoData1')
+#(tempData<- sample(c(t(data1[1,])), size=1000))
+#tempData<- data1[1,]
+#(temp21<-likelihood.cpp.wrap.general(func="likelihood", data=tempData, const=100, arc=TRUE, theta.minimum=-1, theta.range=4, maxit=10000))
+#comparison(temp21)
 
 
 
+#--------- Main workhorse: Performs the optimization-------------#
 
 likelihood.cpp2.wrap.general<- function (func, data, init, initial.Nj, const, arc, maxit=50000,...) {
   # Look for degrees in the data, so their estimates are nony vanishing
@@ -194,11 +194,6 @@ likelihood.cpp2.wrap.general<- function (func, data, init, initial.Nj, const, ar
   
   if(missing(init)) { 
 	  init<- list( 
-			  #one= c(log.c=log.c, qnorm.theta=qnorm.theta(1,const), log(rep(10*cap, param.size))+1),
-			  #two= c(log.c=log.c, qnorm.theta=qnorm.theta(1,const), log(rep(initial.Nj,param.size))+1),
-			  #three= c(log.c=log.c, qnorm.theta=qnorm.theta(1,const), log(runif(min=cap, max=3*cap ,n=param.size))+1) ,
-			  #four= c(log.c=log.c, qnorm.theta=qnorm.theta(1,const), log(cap.arcs)+1),
-			  #five= c(log.c=log.c, qnorm.theta=qnorm.theta(1,const), log(rep(max.cap.arcs, param.size))+1 ),
 			  six0.2= c(log.c=log.c, qnorm.theta=qnorm.theta(0.2,const), log(data.table)+1 ),
 			  #six0.5= c(log.c=log.c, qnorm.theta=qnorm.theta(0.5,const), log(data.table)+1 ),
 			  #six0.9= c(log.c=log.c, qnorm.theta=qnorm.theta(0.9,const), log(data.table)+1 ),
@@ -226,7 +221,7 @@ likelihood.cpp2.wrap.general<- function (func, data, init, initial.Nj, const, ar
 
 
 
-
+# Optimization with fixed theta:
 likelihood.cpp2.wrap.fix.theta<- function (func, data, Sij, init, initial.Nj, const, arc, maxit=1000, theta, ...) {
   # Look for degrees in the data, so their estimates are nony vanishing
   N.j<- rep(0, max(data)) 
@@ -312,10 +307,7 @@ likelihood.cpp2.wrap.fix.theta<- function (func, data, Sij, init, initial.Nj, co
 
 
 
-######################################################
-
-
-
+#--- ------ fucntions for formatting messy simulation output----------#
 exctract.best <- function (y) {
   # Extractor of resutls from Condor in **wierd** format.
   location.index<- which(!sapply(y, is.null)) # this is needed due to the stupid output of condor.R
@@ -362,10 +354,3 @@ save.output2 <- function(result) {
 
 
 
-
-comparison <- function (estimation) {
-  print(signif(cbind(sapply(estimation, function(x) return(x$Nj)))))
-  print(sapply(estimation, function(x) sum(x$Nj)))
-  print(sapply(estimation, function(x) x$theta))
-  print(sapply(estimation, function(x) x[[4]]$value))
-}
